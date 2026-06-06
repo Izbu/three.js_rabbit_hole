@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Bubbles 🫧</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#c8e8ff}
+canvas{display:block}
+#prompt{
+  position:fixed;bottom:44px;left:50%;transform:translateX(-50%);
+  color:rgba(255,255,255,.94);font-family:Georgia,serif;font-size:1.1rem;
+  letter-spacing:.1em;text-align:center;pointer-events:none;
+  text-shadow:0 2px 12px rgba(80,30,120,.4);
+  transition:opacity 1.8s ease}
+#prompt.gone{opacity:0}
+#blowbar{
+  position:fixed;bottom:26px;left:50%;transform:translateX(-50%);
+  width:160px;height:7px;background:rgba(255,255,255,.3);border-radius:4px;
+  pointer-events:none;opacity:0;transition:opacity .5s}
+#blowbar.show{opacity:1}
+#blowfill{height:100%;width:0%;border-radius:4px;
+  background:linear-gradient(90deg,#aaf0ff,#ddaaff,#ffccee)}
+</style>
+</head>
+<body>
+<div id="prompt">🫧 Click to enable mic, then blow gently...</div>
+<div id="blowbar"><div id="blowfill"></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+<script>
+/* ════════════════════════════════════════════════════
+   WHIMSICAL BUBBLE BLOWER  ·  Three.js r150
+   ════════════════════════════════════════════════════ */
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog  = new THREE.FogExp2(0xfce8d8,0.016);
+
+const camera = new THREE.PerspectiveCamera(62,innerWidth/innerHeight,0.05,200);
+camera.position.set(0,2.6,9);
+camera.lookAt(0,1.1,-3);
+
+const clock = new THREE.Clock();
+
+function smat(col,rough=0.82,metal=0){
+  return new THREE.MeshStandardMaterial({color:col,roughness:rough,metalness:metal});
+}
+
+/* ══════════════ LIGHTS ══════════════ */
+scene.add(new THREE.AmbientLight(0xffeee0,.6));
+const sun=new THREE.DirectionalLight(0xffd080,1.1);
+sun.position.set(-10,8,-8); sun.castShadow=true;
+sun.shadow.mapSize.set(1024,1024);
+sun.shadow.camera.left=sun.shadow.camera.bottom=-22;
+sun.shadow.camera.right=sun.shadow.camera.top=22;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xb0d8ff,0x88aa60,.35));
+const wandLight=new THREE.PointLight(0xccddff,0,5);
+scene.add(wandLight);
+
+/* ══════════════ SKY ══════════════ */
+scene.add(new THREE.Mesh(
+  new THREE.SphereGeometry(90,24,16),
+  new THREE.ShaderMaterial({
+    side:THREE.BackSide,
+    uniforms:{
+      uTop:{value:new THREE.Color(0x7ab0e8)},
+      uMid:{value:new THREE.Color(0xffc8a0)},
+      uBtm:{value:new THREE.Color(0xff9966)},
+    },
+    vertexShader:`varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+    fragmentShader:`
+      varying vec3 vP; uniform vec3 uTop,uMid,uBtm;
+      void main(){
+        float h=normalize(vP).y;
+        vec3 c=h>0.?mix(uMid,uTop,pow(h,.55)):mix(uBtm,uMid,h+1.);
+        gl_FragColor=vec4(c,1.);
+      }`,
+  })
+));
+
+const sunM=new THREE.Mesh(new THREE.SphereGeometry(1.5,16,12),new THREE.MeshBasicMaterial({color:0xffe880}));
+sunM.position.set(-30,14,-65); scene.add(sunM);
+const sunH=new THREE.Mesh(new THREE.SphereGeometry(2.8,16,12),new THREE.MeshBasicMaterial({color:0xffcc44,transparent:true,opacity:.12}));
+sunH.position.copy(sunM.position); scene.add(sunH);
+
+// clouds
+(function(){
+  const cm=smat(0xfff4f0,1);
+  function cloud(cx,cy,cz,s){
+    const g=new THREE.Group();
+    [[0,0,0,1],[-1,-.1,0,.65],[1,-.1,0,.6],[-.4,.4,0,.5],[.45,.38,0,.45]].forEach(([bx,by,bz,r])=>{
+      const b=new THREE.Mesh(new THREE.SphereGeometry(r*s,8,7),cm);
+      b.position.set(bx*s,by*s,bz*s); g.add(b);
+    });
+    g.position.set(cx,cy,cz); scene.add(g);
+  }
+  cloud(-18,14,-55,2.2); cloud(10,16,-65,2.6); cloud(30,12,-52,1.8);
+  cloud(-5,18,-72,2.4);  cloud(22,15,-60,1.5); cloud(-28,11,-44,1.6);
+  cloud(0,20,-80,3.0);
+})();
+
+/* ── RAINBOW  (no rotation — arch naturally goes upward in XY plane) */
+(function(){
+  const rcols=[0xff5533,0xff8800,0xffee22,0x44cc44,0x3388ff,0x9944ff];
+  const rads=[8.5,7.9,7.3,6.7,6.1,5.5];
+  rcols.forEach((c,i)=>{
+    const arc=new THREE.Mesh(
+      new THREE.TorusGeometry(rads[i],.2,4,48,Math.PI),
+      new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:.28,depthWrite:false})
+    );
+    // NO rotation — the half-torus arches UP through +Y by default
+    arc.position.set(0,0,-32);
+    scene.add(arc);
+  });
+})();
+
+/* ══════════════ WATER ══════════════ */
+const waterMat=new THREE.ShaderMaterial({
+  uniforms:{uTime:{value:0}},
+  transparent:true, depthWrite:false,
+  vertexShader:`
+    uniform float uTime; varying vec2 vUv;
+    void main(){
+      vUv=uv; vec3 p=position;
+      p.z+=sin(p.x*.45+uTime*1.7)*.05+sin(p.y*.65+uTime*1.2)*.04+sin(p.x*.2-p.y*.55+uTime*.9)*.03;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
+    }`,
+  fragmentShader:`
+    uniform float uTime; varying vec2 vUv;
+    void main(){
+      float sh=sin(vUv.x*9.+uTime*2.)*sin(vUv.y*7.+uTime*1.4)*.08+.92;
+      vec3 deep=vec3(.22,.52,.75),lite=vec3(.48,.82,.94);
+      vec3 col=mix(deep,lite,sh);
+      float g=smoothstep(.54,.64,vUv.x)*smoothstep(.74,.64,vUv.x);
+      col=mix(col,vec3(1.,.9,.65),g*.25);
+      gl_FragColor=vec4(col,.84);
+    }`,
+});
+const water=new THREE.Mesh(new THREE.PlaneGeometry(65,35,80,40),waterMat);
+water.rotation.x=-Math.PI/2; water.position.set(0,-.08,-13);
+water.receiveShadow=true; scene.add(water);
+const refl=new THREE.Mesh(new THREE.PlaneGeometry(18,4),
+  new THREE.MeshBasicMaterial({color:0xffe090,transparent:true,opacity:.12,depthWrite:false}));
+refl.rotation.x=-Math.PI/2; refl.position.set(-6,.01,-11); scene.add(refl);
+
+/* ══════════════ GROUND ══════════════ */
+function addGround(w,d,x,y,z,col){
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),smat(col,.92));
+  m.rotation.x=-Math.PI/2; m.position.set(x,y,z); m.receiveShadow=true; scene.add(m);
+}
+addGround(65,16,0,0,4,0x82b84e);
+addGround(75,20,0,0,-28,0x72ac40);
+const slp=new THREE.Mesh(new THREE.PlaneGeometry(65,2.8),smat(0x78aa45,.9));
+slp.rotation.x=-Math.PI/2-.3; slp.position.set(0,-.04,-2.2); scene.add(slp);
+
+/* ══════════════ TREES ══════════════ */
+function addTree(x,z,h,r,col){
+  const g=new THREE.Group();
+  const trunk=new THREE.Mesh(new THREE.CylinderGeometry(r*.14,r*.22,h*.38,7),smat(0x6b4226,.9));
+  trunk.position.y=h*.19; g.add(trunk);
+  const lm=smat(col,.86);
+  [[0,h*.32,0,r],[r*.3,h*.5,r*.18,r*.72],[-.28*r,h*.46,-.14*r,r*.64],
+   [.08*r,h*.64,-.1*r,r*.56],[-.12*r,h*.68,r*.18,r*.44]].forEach(([bx,by,bz,br])=>{
+    const b=new THREE.Mesh(new THREE.SphereGeometry(br,9,7),lm);
+    b.position.set(bx,by,bz); g.add(b);
+  });
+  g.position.set(x,0,z); scene.add(g);
+}
+addTree(-20,-27,5.5,2.6,0x3d6e2e); addTree(-12,-29,6.5,3.0,0x4a7a38);
+addTree(4,-28,5.8,2.7,0x3d6e2e);   addTree(14,-26,5.0,2.3,0x5a8040);
+addTree(-26,-25,4.5,2.1,0x3d6e2e); addTree(22,-27,5.2,2.4,0x4a7a38);
+addTree(9,-24,4.2,1.9,0x5a8040);   addTree(-16,-15,4.0,1.8,0x5a8040);
+addTree(18,-16,3.8,1.6,0x4a7a38);  addTree(-22,-10,3.2,1.4,0x5a8040);
+addTree(20,-10,3.4,1.5,0x4a7a38);  addTree(-30,-18,4.2,2.0,0x3d6e2e);
+addTree(28,-19,4.0,1.9,0x4a7a38);
+
+function addWillow(x,z){
+  const g=new THREE.Group();
+  const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.12,.18,3.5,7),smat(0x6b4226,.9));
+  trunk.position.y=1.75; g.add(trunk);
+  const canopy=new THREE.Mesh(new THREE.SphereGeometry(1.8,10,8),smat(0x5a8a30,.8));
+  canopy.position.y=3.7; g.add(canopy);
+  for(let i=0;i<14;i++){
+    const a=i/14*Math.PI*2,r=1.4+Math.random()*.5;
+    const s=new THREE.Mesh(new THREE.CylinderGeometry(.012,.005,1.4+Math.random()*.8,4),smat(0x7aaa40,.9));
+    s.position.set(Math.cos(a)*r,2.5,Math.sin(a)*r);
+    s.rotation.x=.4+Math.random()*.3; s.rotation.z=(Math.random()-.5)*.3; g.add(s);
+  }
+  g.position.set(x,0,z); scene.add(g);
+}
+addWillow(-9,-22); addWillow(8,-20); addWillow(-20,-18); addWillow(18,-14);
+
+/* ══════════════ REEDS ══════════════ */
+const reeds=[];
+function addReed(x,z){
+  const g=new THREE.Group();
+  const h=1.1+Math.random()*.9;
+  const stem=new THREE.Mesh(new THREE.CylinderGeometry(.022,.03,h,5),smat(0xd4aa60,.88));
+  g.add(stem);
+  const ct=new THREE.Mesh(new THREE.CylinderGeometry(.038,.038,.2,7),smat(0x7a4a1e,.85));
+  ct.position.y=h/2+.14; g.add(ct);
+  g.position.set(x,h/2,z); g.userData.phase=Math.random()*Math.PI*2;
+  scene.add(g); reeds.push(g);
+}
+for(let i=0;i<34;i++){
+  const s=Math.random()>.5?1:-1;
+  addReed(s*(7+Math.random()*16),-4-Math.random()*8);
+}
+for(let i=0;i<14;i++) addReed((Math.random()-.5)*32,-2.5-Math.random()*2.5);
+
+/* ══════════════ GRASS ══════════════ */
+for(let i=0;i<160;i++){
+  const t=new THREE.Mesh(new THREE.ConeGeometry(.04+Math.random()*.04,.15+Math.random()*.14,4),smat(0x8ab050,.9));
+  t.position.set((Math.random()-.5)*42,.08,Math.random()*10-1.5);
+  t.rotation.y=Math.random()*Math.PI; t.rotation.z=(Math.random()-.5)*.35;
+  scene.add(t);
+}
+
+/* ══════════════ FLOWERS ══════════════ */
+const flcols=[0xff88cc,0xffee66,0xcc88ff,0xffffff,0xff6699,0xffaa44,0xaaddff,0xff5588,0xffcc88,0x88ffcc];
+const flowerObjs=[];
+function addFlower(x,z,sc){
+  const fg=new THREE.Group();
+  const petals=4+Math.floor(Math.random()*4);
+  const col=flcols[Math.floor(Math.random()*flcols.length)];
+  const pm=smat(col,.8);
+  const pr=.1+Math.random()*.04;
+  for(let p=0;p<petals;p++){
+    const pa=p/petals*Math.PI*2;
+    const pet=new THREE.Mesh(new THREE.SphereGeometry(.06+Math.random()*.02,5,4),pm);
+    pet.scale.set(1,.4,1);
+    pet.position.set(Math.cos(pa)*pr,.22+Math.random()*.05,Math.sin(pa)*pr);
+    fg.add(pet);
+  }
+  const centre=new THREE.Mesh(new THREE.SphereGeometry(.052,6,6),smat(0xffee55));
+  centre.position.y=.24; fg.add(centre);
+  const stem=new THREE.Mesh(new THREE.CylinderGeometry(.012,.012,.22+Math.random()*.1,4),smat(0x55aa33));
+  stem.position.y=.11; fg.add(stem);
+  fg.scale.setScalar(sc||1);
+  fg.position.set(x,0,z);
+  fg.userData.phase=Math.random()*Math.PI*2;
+  scene.add(fg); flowerObjs.push(fg);
+}
+for(let i=0;i<320;i++){
+  let x,z; const r=Math.random();
+  if(r<.32){       x=-2-Math.random()*18; z=(Math.random()-.1)*9; }
+  else if(r<.64){  x=2+Math.random()*18;  z=(Math.random()-.1)*9; }
+  else if(r<.82){  x=(Math.random()-.5)*10; z=2+Math.random()*6; }
+  else{            x=(Math.random()-.5)*28; z=-1+Math.random()*1.5; }
+  addFlower(x,z,.7+Math.random()*.7);
+}
+for(let i=0;i<80;i++) addFlower((Math.random()-.5)*38,-24-Math.random()*4,.6+Math.random()*.6);
+
+/* ══════════════ POLLEN ══════════════ */
+const pollenMat=new THREE.MeshBasicMaterial({color:0xffee88,transparent:true,opacity:.55});
+const pollens=[];
+for(let i=0;i<80;i++){
+  const p=new THREE.Mesh(new THREE.SphereGeometry(.022,4,4),pollenMat);
+  p.position.set((Math.random()-.5)*24,.4+Math.random()*4.5,(Math.random()-.5)*18-2);
+  p.userData.v=new THREE.Vector3((Math.random()-.5)*.005,(Math.random()-.5)*.002,(Math.random()-.5)*.004);
+  scene.add(p); pollens.push(p);
+}
+
+/* ══════════════ BUNNIES ══════════════ */
+const bunnies=[];
+function makeBunny(sx,sz,furHex){
+  const g=new THREE.Group();
+  const fur=smat(furHex||0xf0ece0,.88);
+  const pink=smat(0xffb8cc,.8);
+  const cream=smat(0xfff0e8,.9);
+  const blk=smat(0x1a1a1a,.3);
+  const body=new THREE.Mesh(new THREE.SphereGeometry(.24,12,10),fur);
+  body.scale.set(1,.86,.95); body.position.y=.25; g.add(body);
+  const tummy=new THREE.Mesh(new THREE.SphereGeometry(.16,10,8),cream);
+  tummy.scale.set(.88,.72,.4); tummy.position.set(0,.24,.21); g.add(tummy);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(.185,12,10),fur);
+  head.position.set(0,.55,.09); g.add(head);
+  [-1,1].forEach(s=>{
+    const ear=new THREE.Mesh(new THREE.CapsuleGeometry(.042,.3,4,8),fur);
+    ear.position.set(s*.08,.84,.06); ear.rotation.z=s*.14; g.add(ear);
+    const inner=new THREE.Mesh(new THREE.CapsuleGeometry(.026,.2,4,8),pink);
+    inner.position.set(s*.08,.84,.09); inner.rotation.z=s*.14; g.add(inner);
+  });
+  [-1,1].forEach(s=>{
+    const eye=new THREE.Mesh(new THREE.SphereGeometry(.024,8,8),blk);
+    eye.position.set(s*.068,.58,.178); g.add(eye);
+    const spec=new THREE.Mesh(new THREE.SphereGeometry(.008,5,5),new THREE.MeshBasicMaterial({color:0xffffff}));
+    spec.position.set(s*.068+.01,.585,.188); g.add(spec);
+  });
+  const nose=new THREE.Mesh(new THREE.SphereGeometry(.018,6,6),pink);
+  nose.position.set(0,.524,.265); g.add(nose);
+  [-1,1].forEach(s=>{
+    const ck=new THREE.Mesh(new THREE.CircleGeometry(.042,8),
+      new THREE.MeshBasicMaterial({color:0xffb0cc,transparent:true,opacity:.55}));
+    ck.position.set(s*.11,.535,.178); g.add(ck);
+  });
+  const tail=new THREE.Mesh(new THREE.SphereGeometry(.082,8,8),
+    new THREE.MeshStandardMaterial({color:0xffffff,roughness:.95}));
+  tail.position.set(0,.26,-.22); g.add(tail);
+  [-1,1].forEach(s=>{
+    const paw=new THREE.Mesh(new THREE.SphereGeometry(.065,7,7),fur);
+    paw.scale.set(.8,.48,1.2); paw.position.set(s*.12,.07,.2); g.add(paw);
+  });
+  g.position.set(sx,0,sz);
+  g.userData={x:sx,dir:Math.random()>.5?1:-1,speed:.7+Math.random()*.6,hopH:.28+Math.random()*.18,hopFreq:2.2+Math.random()*1.4};
+  scene.add(g); bunnies.push(g);
+}
+makeBunny(-6,2.5,0xf2ece0); makeBunny(4,1.8,0xe0d8cc); makeBunny(-2,3.5,0xf8f4ee);
+makeBunny(8,2.0,0xd8d0c4);  makeBunny(-10,1.2,0xf0e8dc);
+
+/* ══════════════════════════════════════════
+   BUBBLE WAND
+   ─────────────────────────────────────────
+   wandGroup y = -7  →  stick base is off-screen.
+   LOOP_Y local = 9.9  →  world y = 2.9 (centre-screen).
+   Only the top of the stick, ferrule & big loop
+   are ever in frame.
+══════════════════════════════════════════ */
+const wandGroup=new THREE.Group();
+wandGroup.position.set(0,-7,6.5);
+wandGroup.rotation.z=-0.06;   // tiny natural lean
+scene.add(wandGroup);
+
+// thin elegant stick — ivory/cream
+const stickMat=new THREE.MeshStandardMaterial({color:0xf5e8d0,roughness:.55,metalness:.06});
+const stick=new THREE.Mesh(new THREE.CylinderGeometry(.030,.042,11,10),stickMat);
+stick.position.y=5.5;   // centred in 11-unit stick → top at local y=11
+wandGroup.add(stick);
+
+// coloured ribbon wrap — only the top inch enters frame; keeps wand cute
+const ribCols=[0xffaacc,0xcc99ff,0xaaccff,0xffddaa,0xaaffcc];
+for(let i=0;i<12;i++){
+  const ring=new THREE.Mesh(
+    new THREE.TorusGeometry(.052,.014,5,14),
+    new THREE.MeshStandardMaterial({color:ribCols[i%ribCols.length],roughness:.55})
+  );
+  ring.position.y=9.0+i*.18;
+  ring.rotation.x=Math.PI/2;
+  wandGroup.add(ring);
+}
+
+// rose-gold ferrule ring just below the loop
+const ferrule=new THREE.Mesh(
+  new THREE.CylinderGeometry(.085,.085,.18,14),
+  new THREE.MeshStandardMaterial({color:0xf0b8c8,roughness:.22,metalness:.60})
+);
+ferrule.position.y=9.80;
+wandGroup.add(ferrule);
+
+// ── THE LOOP — big, prominent, centred in frame ──
+const LOOP_Y=9.92;
+const loopTorus=new THREE.Mesh(
+  new THREE.TorusGeometry(.70,.024,8,64),
+  new THREE.MeshStandardMaterial({color:0xe8d8f8,roughness:.16,metalness:.70})
+);
+loopTorus.position.y=LOOP_Y;
+wandGroup.add(loopTorus);
+
+// iridescent soap film
+const filmMat=new THREE.ShaderMaterial({
+  uniforms:{uTime:{value:0}},
+  transparent:true, side:THREE.DoubleSide, depthWrite:false,
+  vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+  fragmentShader:`
+    varying vec2 vUv; uniform float uTime;
+    void main(){
+      vec2 c=vUv-.5; float d=length(c);
+      float r=sin(d*10.-uTime*1.3)*.5+.5;
+      vec3 ca=vec3(.82,.58,1.), cb=vec3(.44,.92,1.), cc=vec3(1.,.80,.90);
+      vec3 col=mix(ca,cb,r); col=mix(col,cc,sin(d*6.+uTime*.9)*.3+.3);
+      float a=(1.-smoothstep(.44,.52,d))*.60;
+      gl_FragColor=vec4(col,a);
+    }`,
+});
+const film=new THREE.Mesh(new THREE.CircleGeometry(.685,64),filmMat);
+film.position.y=LOOP_Y;
+wandGroup.add(film);
+
+// soft glow aura around loop when blowing
+const auraMat=new THREE.MeshBasicMaterial({color:0xbbddff,transparent:true,opacity:0,depthWrite:false});
+const aura=new THREE.Mesh(new THREE.SphereGeometry(.95,16,12),auraMat);
+aura.position.y=LOOP_Y;
+wandGroup.add(aura);
+
+/* ══════════════ BUBBLE SHADER ══════════════ */
+function makeBubbleMat(){
+  return new THREE.ShaderMaterial({
+    uniforms:{uTime:{value:0},uSeed:{value:Math.random()*10}},
+    transparent:true, depthWrite:false, side:THREE.DoubleSide,
+    vertexShader:`
+      varying vec3 vN,vV;
+      void main(){
+        vN=normalize(normalMatrix*normal);
+        vec4 mv=modelViewMatrix*vec4(position,1.); vV=normalize(-mv.xyz);
+        gl_Position=projectionMatrix*mv;
+      }`,
+    fragmentShader:`
+      varying vec3 vN,vV; uniform float uTime,uSeed;
+      void main(){
+        float fr=pow(1.-clamp(dot(vN,vV),0.,1.),1.05);
+        float t=uTime*.42+uSeed, band=fr*5.5+t;
+        vec3 c1=vec3(1.,.52,.76),c2=vec3(.4,.76,1.),
+             c3=vec3(.62,1.,.78),c4=vec3(1.,.88,.42),c5=vec3(.75,.42,1.);
+        float f1=sin(band)*.5+.5, f2=sin(band*1.6+1.1)*.5+.5, f3=sin(band*.75-.7)*.5+.5;
+        vec3 col=mix(c1,c2,f1); col=mix(col,c3,f2*.55);
+        col=mix(col,c4,f3*.42); col=mix(col,c5,(1.-f1)*.3);
+        gl_FragColor=vec4(col,fr*.92+.03);
+      }`,
+  });
+}
+
+/* ══════════════ BUBBLE SYSTEM ══════════════ */
+const bubbles=[],popRings=[];
+let bubbleTmr=0, blowStr=0;
+
+function getLoopWorld(){
+  wandGroup.updateMatrixWorld(true);
+  return new THREE.Vector3(0,LOOP_Y,0).applyMatrix4(wandGroup.matrixWorld);
+}
+
+function spawnBubble(){
+  const sz=.09+Math.random()*.18+blowStr*.14;
+  const b=new THREE.Mesh(new THREE.SphereGeometry(sz,30,22),makeBubbleMat());
+  const o=getLoopWorld();
+  b.position.copy(o);
+  b.position.x+=(Math.random()-.5)*.12;
+  b.position.y+=(Math.random()-.5)*.09;
+  b.userData={
+    vx:(Math.random()-.5)*.014, vy:.020+Math.random()*.020+blowStr*.026,
+    vz:-(0.009+Math.random()*.012+blowStr*.01),
+    wx:Math.random()*Math.PI*2, wz:Math.random()*Math.PI*2,
+    ws:.4+Math.random()*.65, life:0, maxLife:220+Math.random()*280, sz,
+  };
+  scene.add(b); bubbles.push(b);
+}
+
+function popBubble(b){
+  const ring=new THREE.Mesh(
+    new THREE.RingGeometry(0,b.userData.sz*1.2,22),
+    new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:.6,side:THREE.DoubleSide,depthWrite:false})
+  );
+  ring.position.copy(b.position); ring.lookAt(camera.position);
+  ring.userData={life:0,maxLife:22};
+  scene.add(ring); popRings.push(ring);
+}
+
+/* ══════════════ MICROPHONE ══════════════ */
+let micAnalyser=null,micData=null,micReady=false;
+async function initMic(){
+  if(micReady) return;
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    const actx=new(window.AudioContext||window.webkitAudioContext)();
+    const src=actx.createMediaStreamSource(stream);
+    micAnalyser=actx.createAnalyser(); micAnalyser.fftSize=512;
+    src.connect(micAnalyser);
+    micData=new Uint8Array(micAnalyser.frequencyBinCount);
+    micReady=true;
+    document.getElementById('blowbar').classList.add('show');
+    const pr=document.getElementById('prompt');
+    pr.textContent='🫧 Now blow gently into your mic!';
+    setTimeout(()=>pr.classList.add('gone'),3200);
+  }catch(e){
+    document.getElementById('prompt').textContent='🎤 Mic access needed — allow it and refresh.';
+  }
+}
+document.addEventListener('click',()=>initMic(),{once:true});
+
+/* ══════════════ RESIZE ══════════════ */
+window.addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
+/* ══════════════ ANIMATE ══════════════ */
+function animate(){
+  requestAnimationFrame(animate);
+  const t=clock.getElapsedTime();
+
+  // mic blow
+  if(micReady&&micAnalyser){
+    micAnalyser.getByteFrequencyData(micData);
+    let sum=0; for(let k=0;k<micData.length;k++) sum+=micData[k];
+    const vol=sum/(micData.length*255);
+    blowStr=vol>.09?Math.min(1,(vol-.09)*5.5):0;
+  } else { blowStr=0; }
+
+  document.getElementById('blowfill').style.width=(blowStr*100)+'%';
+  film.visible=blowStr<.06;
+  filmMat.uniforms.uTime.value=t;
+  auraMat.opacity=blowStr*.42;
+  wandLight.intensity=blowStr*2.4;
+  wandLight.position.copy(getLoopWorld());
+
+  // spawn bubbles (mic only)
+  if(blowStr>.06){
+    bubbleTmr++;
+    const rate=Math.max(1,Math.round(5-blowStr*4));
+    if(bubbleTmr%rate===0){
+      spawnBubble();
+      if(blowStr>.55) spawnBubble();
+      if(blowStr>.82) spawnBubble();
+    }
+  }
+
+  // update bubbles
+  for(let i=bubbles.length-1;i>=0;i--){
+    const b=bubbles[i],d=b.userData;
+    d.life++;
+    d.wx+=d.ws*.032; d.wz+=d.ws*.026;
+    b.position.x+=d.vx+Math.sin(d.wx)*.005;
+    b.position.y+=d.vy;
+    b.position.z+=d.vz+Math.sin(d.wz)*.004;
+    d.vy*=.9985; d.vx*=.993;
+    b.material.uniforms.uTime.value=t;
+    const r=d.life/d.maxLife;
+    if(r>.8){ b.scale.setScalar(1-(r-.8)/.2); if(r>.95&&d.life%4===0) b.visible=!b.visible; }
+    if(d.life>=d.maxLife){
+      b.visible=true; popBubble(b);
+      scene.remove(b); b.geometry.dispose(); b.material.dispose(); bubbles.splice(i,1);
+    }
+  }
+
+  // pop rings
+  for(let i=popRings.length-1;i>=0;i--){
+    const r=popRings[i]; r.userData.life++;
+    const p=r.userData.life/r.userData.maxLife;
+    r.scale.setScalar(1+p*4); r.material.opacity=.6*(1-p); r.lookAt(camera.position);
+    if(r.userData.life>=r.userData.maxLife){
+      scene.remove(r); r.geometry.dispose(); r.material.dispose(); popRings.splice(i,1);
+    }
+  }
+
+  // water
+  waterMat.uniforms.uTime.value=t;
+
+  // reeds
+  reeds.forEach((r,i)=>{
+    r.rotation.x=Math.sin(t*.6+r.userData.phase+i*.7)*.07;
+    r.rotation.z=Math.cos(t*.5+r.userData.phase+i*.55)*.05;
+  });
+
+  // flowers
+  flowerObjs.forEach((f,i)=>{
+    f.rotation.y=Math.sin(t*.4+f.userData.phase+i*.3)*.06;
+    f.rotation.z=Math.sin(t*.5+f.userData.phase)*.04;
+  });
+
+  // pollen
+  pollens.forEach(p=>{
+    p.position.addScaledVector(p.userData.v,1);
+    if(p.position.x>14)  p.position.x=-14;
+    if(p.position.x<-14) p.position.x=14;
+    if(p.position.y>5.5) p.position.y=.5;
+    if(p.position.y<.3)  p.position.y=5.5;
+  });
+
+  // bunnies
+  bunnies.forEach(b=>{
+    const d=b.userData;
+    d.x+=d.dir*d.speed*.024;
+    const hp=d.x*d.hopFreq;
+    b.position.x=d.x;
+    b.position.y=Math.abs(Math.sin(hp))*d.hopH;
+    const air=Math.abs(Math.sin(hp));
+    b.scale.set(1-air*.06,1+air*.14,1-air*.04);
+    b.rotation.x=Math.cos(hp)*d.hopH*d.hopFreq*d.dir*-.06;
+    b.rotation.y=d.dir>0?0:Math.PI;
+    if(d.x>12) d.dir=-1; if(d.x<-12) d.dir=1;
+  });
+
+  // wand idle sway
+  wandGroup.rotation.z=-0.06+Math.sin(t*.72)*.018;
+  wandGroup.rotation.x=Math.sin(t*.44)*.008;
+
+  renderer.render(scene,camera);
+}
+
+scene.updateMatrixWorld(true);
+animate();
+</script>
+</body>
+</html>
